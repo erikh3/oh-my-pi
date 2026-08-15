@@ -533,6 +533,24 @@ export const SETTINGS_SCHEMA = {
 
 	disabledExtensions: { type: "array", default: EMPTY_STRING_ARRAY },
 
+	extensionHandlerTimeoutMs: {
+		type: "number",
+		default: 30000,
+		ui: {
+			tab: "tools",
+			group: "Discovery & MCP",
+			label: "Extension Handler Timeout",
+			description:
+				"Milliseconds an extension event handler may run before the host aborts it and reports a timeout. Raise it for extensions that legitimately wait on human input (e.g. a tool_call permission dialog). The session_shutdown teardown handler keeps its own short cap; values <= 0 fall back to the 30s default.",
+			options: [
+				{ value: "30000", label: "30 seconds", description: "Default" },
+				{ value: "60000", label: "1 minute" },
+				{ value: "120000", label: "2 minutes" },
+				{ value: "300000", label: "5 minutes" },
+			],
+		},
+	},
+
 	modelRoleStorage: {
 		type: "enum",
 		values: ["global", "project"] as const,

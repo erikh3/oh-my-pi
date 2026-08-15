@@ -108,12 +108,6 @@ export function testSetSessionShutdownHandlerTimeoutMs(timeoutMs: number): void 
 	sessionShutdownHandlerTimeoutMs = timeoutMs;
 }
 
-/** Per-event handler budget. Defaults to the generic cap; `session_shutdown`
- *  uses its own short cap so teardown stays prompt. */
-function handlerTimeoutForEvent(eventType: string): number {
-	return eventType === "session_shutdown" ? sessionShutdownHandlerTimeoutMs : extensionHandlerTimeoutMs;
-}
-
 const EXTENSION_HANDLER_TIMEOUT = Symbol("extensionHandlerTimeout");
 const EXTENSION_HANDLER_ABORTED = Symbol("extensionHandlerAborted");
 
@@ -755,7 +749,7 @@ export class ExtensionRunner {
 				try {
 					const scope = this.#toolRegistrationScope.getStore();
 					const registrationSignal =
-						scope && !scope.closed ? scope.signal : AbortSignal.timeout(extensionHandlerTimeoutMs);
+						scope && !scope.closed ? scope.signal : AbortSignal.timeout(this.#genericHandlerTimeoutMs());
 					const pending = listener(tool, registrationSignal);
 					if (pending) trackRegistration(pending);
 				} catch (error) {
@@ -1111,6 +1105,21 @@ export class ExtensionRunner {
 		return handlerResult as TResult | undefined;
 	}
 
+	/**
+	 * Effective generic handler budget. An explicitly configured
+	 * `extensionHandlerTimeoutMs` setting wins so extensions that legitimately
+	 * wait on human input (e.g. a `tool_call` permission dialog) are not killed
+	 * at the 30s default; a non-positive or unset value falls back to the
+	 * module-level default, which the test seam (`testSetExtensionHandlerTimeoutMs`)
+	 * overrides. Resolved live per event so a mid-session config change applies.
+	 */
+	#genericHandlerTimeoutMs(): number {
+		const configured = this.settings?.isConfigured("extensionHandlerTimeoutMs")
+			? this.settings.get("extensionHandlerTimeoutMs")
+			: undefined;
+		return typeof configured === "number" && configured > 0 ? configured : extensionHandlerTimeoutMs;
+	}
+
 	async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
 		// Defer the per-event context allocation (and the Promise.race/Bun.sleep
 		// timeout machinery) to the first matching handler. Streaming sessions emit
@@ -1120,7 +1129,7 @@ export class ExtensionRunner {
 		let result: SessionBeforeEventResult | SessionCompactingResult | SessionStopEventResult | undefined;
 
 		if (this.#isSessionShutdownEvent(event)) {
-			const timeoutMs = handlerTimeoutForEvent(event.type);
+			const timeoutMs = sessionShutdownHandlerTimeoutMs;
 			const promises: Promise<unknown>[] = [];
 			for (const ext of this.extensions) {
 				const handlers = ext.handlers.get(event.type);
@@ -1145,7 +1154,7 @@ export class ExtensionRunner {
 					event,
 					ctx,
 					ext,
-					handlerTimeoutForEvent(event.type),
+					this.#genericHandlerTimeoutMs(),
 				);
 
 				if (this.#isSessionBeforeEvent(event) && handlerResult) {
@@ -1189,7 +1198,7 @@ export class ExtensionRunner {
 					currentEvent,
 					ctx,
 					ext,
-					extensionHandlerTimeoutMs,
+					this.#genericHandlerTimeoutMs(),
 				)) as ToolResultEventResult | undefined;
 				if (!handlerResult) continue;
 
@@ -1234,7 +1243,7 @@ export class ExtensionRunner {
 	 */
 	async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
 		const ctx = this.createContext();
-		const timeoutMs = extensionHandlerTimeoutMs;
+		const timeoutMs = this.#genericHandlerTimeoutMs();
 		let result: ToolCallEventResult | undefined;
 
 		for (const ext of this.extensions) {
@@ -1293,7 +1302,7 @@ export class ExtensionRunner {
 					event,
 					ctx,
 					ext,
-					extensionHandlerTimeoutMs,
+					this.#genericHandlerTimeoutMs(),
 				);
 				if (handlerResult) {
 					return handlerResult as R;
@@ -1328,7 +1337,7 @@ export class ExtensionRunner {
 					event,
 					ctx,
 					ext,
-					extensionHandlerTimeoutMs,
+					this.#genericHandlerTimeoutMs(),
 				);
 				const result = handlerResult as ResourcesDiscoverResult | undefined;
 
@@ -1360,9 +1369,13 @@ export class ExtensionRunner {
 		for (const ext of this.extensions) {
 			for (const handler of ext.handlers.get("input") ?? []) {
 				const event: InputEvent = { type: "input", text: currentText, images: currentImages, source };
-				const result = (await this.#runHandlerWithTimeout(handler, event, ctx, ext, extensionHandlerTimeoutMs)) as
-					| InputEventResult
-					| undefined;
+				const result = (await this.#runHandlerWithTimeout(
+					handler,
+					event,
+					ctx,
+					ext,
+					this.#genericHandlerTimeoutMs(),
+				)) as InputEventResult | undefined;
 				if (result?.handled) return result;
 				if (result?.text !== undefined) currentText = result.text;
 				if (result?.images !== undefined) currentImages = result.images;
@@ -1408,7 +1421,7 @@ export class ExtensionRunner {
 					event,
 					ctx,
 					ext,
-					extensionHandlerTimeoutMs,
+					this.#genericHandlerTimeoutMs(),
 				);
 
 				if (handlerResult && (handlerResult as ContextEventResult).messages) {
@@ -1439,7 +1452,7 @@ export class ExtensionRunner {
 					event,
 					ctx,
 					ext,
-					extensionHandlerTimeoutMs,
+					this.#genericHandlerTimeoutMs(),
 				);
 				if (handlerResult !== undefined) {
 					currentPayload = handlerResult;
@@ -1465,7 +1478,7 @@ export class ExtensionRunner {
 					requestId: response.requestId,
 					metadata: response.metadata,
 				};
-				await this.#runHandlerWithTimeout(handler, event, ctx, ext, extensionHandlerTimeoutMs);
+				await this.#runHandlerWithTimeout(handler, event, ctx, ext, this.#genericHandlerTimeoutMs());
 			}
 		}
 	}
@@ -1496,7 +1509,7 @@ export class ExtensionRunner {
 					event,
 					ctx,
 					ext,
-					extensionHandlerTimeoutMs,
+					this.#genericHandlerTimeoutMs(),
 				);
 
 				if (handlerResult) {

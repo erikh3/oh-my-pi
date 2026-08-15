@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `extensionHandlerTimeoutMs` setting to configure how long an extension event handler may run before the host aborts it (default 30s). Raise it for extensions that legitimately wait on human input, such as a `tool_call` permission dialog; `session_shutdown` keeps its own short teardown cap.
+
 ## [17.3.4] - 2026-08-14
 
 ### Changed

@@ -10,6 +10,7 @@ import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import {
 	EXTENSION_HANDLER_TIMEOUT_MS,
@@ -1300,6 +1301,54 @@ describe("ExtensionRunner", () => {
 					extensionPath: hangExtensionPath,
 					event: "session_start",
 					error: "handler timed out after 10ms",
+				},
+			]);
+
+			warnSpy.mockRestore();
+		});
+
+		it("honors a configured extensionHandlerTimeoutMs for non-shutdown handlers without the test seam", async () => {
+			const hangExtensionPath = path.join(tempDir.path(), "config-timeout-hang.ts");
+			fs.writeFileSync(
+				hangExtensionPath,
+				`
+					export default function(pi) {
+						pi.on("session_start", async () => {
+							await Promise.withResolvers().promise;
+						});
+					}
+				`,
+			);
+
+			const result = await loadTestExtensions([hangExtensionPath]);
+			// Pass the setting through the constructor instead of calling
+			// testSetExtensionHandlerTimeoutMs: the module-level default stays at
+			// 30s, so only the configured value can end the hung handler quickly.
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+				undefined,
+				Settings.isolated({ extensionHandlerTimeoutMs: 15 }),
+			);
+			const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+			const errors: ExtensionError[] = [];
+			runner.onError(err => {
+				errors.push(err);
+			});
+
+			const startedAt = performance.now();
+			await runner.emit({ type: "session_start" });
+			const elapsedMs = performance.now() - startedAt;
+
+			expect(elapsedMs).toBeLessThan(1000);
+			expect(errors).toEqual([
+				{
+					extensionPath: hangExtensionPath,
+					event: "session_start",
+					error: "handler timed out after 15ms",
 				},
 			]);
 
